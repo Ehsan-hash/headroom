@@ -141,6 +141,9 @@ class TokenizerRegistry:
     # Registered factories (backend -> factory function)
     _factories: dict[str, Callable[[str], TokenCounter]] = {}
 
+    # Registered model factories (model -> factory function)
+    _model_factories: dict[str, Callable[[str], TokenCounter]] = {}
+
     # Cache for auto-detected tokenizers
     _cache: dict[str, TokenCounter] = {}
 
@@ -163,6 +166,7 @@ class TokenizerRegistry:
             "moonshot": self._create_moonshot,
             "estimation": self._create_estimation,
         }
+        self._model_factories = {}
 
     @classmethod
     def get(
@@ -199,7 +203,10 @@ class TokenizerRegistry:
 
         # Create tokenizer
         try:
-            tokenizer = registry._create_tokenizer(model, backend)
+            if backend is None and model_lower in registry._model_factories:
+                tokenizer = registry._model_factories[model_lower](model)
+            else:
+                tokenizer = registry._create_tokenizer(model, backend)
             registry._cache[cache_key] = tokenizer
             return tokenizer
         except Exception as e:
@@ -234,8 +241,10 @@ class TokenizerRegistry:
 
         if tokenizer is not None:
             registry._tokenizers[model_lower] = tokenizer
+            registry._model_factories.pop(model_lower, None)
         elif factory is not None:
-            registry._factories[model_lower] = factory
+            registry._model_factories[model_lower] = factory
+            registry._tokenizers.pop(model_lower, None)
         else:
             raise ValueError("Must provide either tokenizer or factory")
 
