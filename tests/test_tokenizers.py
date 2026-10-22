@@ -462,6 +462,66 @@ class TestTokenizerRegistry:
         assert get_tokenizer(model.upper()) is recreated
         assert replacement_calls == [model]
 
+    def test_model_factory_failure_does_not_poison_strict_or_recovery(self, monkeypatch):
+        """A fallback from a model factory must not hide later retries."""
+        registry = TokenizerRegistry()
+        for attr in ("_tokenizers", "_factories", "_cache"):
+            monkeypatch.setattr(registry, attr, getattr(registry, attr).copy())
+        monkeypatch.setattr(
+            registry,
+            "_model_factories",
+            getattr(registry, "_model_factories", {}).copy(),
+            raising=False,
+        )
+
+        model = "Transient-Factory-Model"
+        state = {"available": False}
+        calls: list[str] = []
+        custom = CharacterCounter(chars_per_token=1.0)
+
+        def factory(requested_model: str) -> CharacterCounter:
+            calls.append(requested_model)
+            if not state["available"]:
+                raise RuntimeError("temporary factory outage")
+            return custom
+
+        register_tokenizer(model, factory=factory)
+
+        first = get_tokenizer(model)
+        with pytest.raises(ValueError, match="No tokenizer available"):
+            get_tokenizer(model, fallback=False)
+
+        state["available"] = True
+        recovered = get_tokenizer(model, fallback=False)
+
+        assert isinstance(first, EstimatingTokenCounter)
+        assert recovered is custom
+        assert calls == [model, model, model]
+
+    def test_list_registered_includes_model_factories_and_replacements(self, monkeypatch):
+        """Registered model names should include both instances and factories."""
+        registry = TokenizerRegistry()
+        for attr in ("_tokenizers", "_factories", "_cache"):
+            monkeypatch.setattr(registry, attr, getattr(registry, attr).copy())
+        monkeypatch.setattr(
+            registry,
+            "_model_factories",
+            getattr(registry, "_model_factories", {}).copy(),
+            raising=False,
+        )
+
+        model = "Listed-Factory-Model"
+        register_tokenizer(model, factory=lambda _: CharacterCounter(chars_per_token=1.0))
+        assert model.lower() in registry.list_registered()
+
+        register_tokenizer(model, tokenizer=CharacterCounter(chars_per_token=2.0))
+        assert model.lower() in registry.list_registered()
+
+        register_tokenizer(model, factory=lambda _: CharacterCounter(chars_per_token=3.0))
+        registered = registry.list_registered()
+        assert model.lower() in registered
+        assert registered.count(model.lower()) == 1
+
     def test_list_supported_models(self):
         """Test listing supported models."""
         models = list_supported_models()
